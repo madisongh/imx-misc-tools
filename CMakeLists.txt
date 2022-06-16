@@ -23,4 +23,7 @@ add_executable(imx-bootinfo imx-bootinfo.c bootinfo.c bootinfo.h util.c util.h p
 target_compile_definitions(imx-bootinfo PUBLIC VERSION="${PROJECT_VERSION}")
 target_link_libraries(imx-bootinfo PUBLIC PkgConfig::ZLIB)
 
-install(TARGETS imx-bootinfo RUNTIME)
+add_executable(keystoretool keystoretool.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
+target_link_libraries(keystoretool PUBLIC PkgConfig::ZLIB)
+
+install(TARGETS imx-bootinfo keystoretool RUNTIME)
