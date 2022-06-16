@@ -1,0 +1,2 @@
+d /run/imx-bootinfo 02770 root @LKDIRGROUP@ - -
+f /run/imx-bootinfo/lockfile 0770 root @LKDIRGROUP@ - -
