@@ -19,7 +19,7 @@ pkg_get_variable(TMPFILESDIR systemd tmpfilesdir)
 configure_file(config-files/imx-bootinfo.conf.in imx-bootinfo.conf @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/imx-bootinfo.conf DESTINATION ${TMPFILESDIR})
 
-add_executable(imx-bootinfo imx-bootinfo.c util.c util.h posix-crc32.c posix-crc32.h)
+add_executable(imx-bootinfo imx-bootinfo.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
 target_compile_definitions(imx-bootinfo PUBLIC VERSION="${PROJECT_VERSION}")
 target_link_libraries(imx-bootinfo PUBLIC PkgConfig::ZLIB)
 
