@@ -218,11 +218,17 @@ get_passphrase (void)
 		ret = bootinfo_bootvar_set(ctx, DMCPP_VARNAME, ppblobtext);
 		if (ret == 0)
 			ret = bootinfo_bootvar_set(ctx, SSKEY_VARNAME, sskeytext);
+		if (ret != 0) {
+			perror("bootinfo_bootvar_set");
+			bootinfo_close(ctx);
+			return 1;
+		}
+		ret = bootinfo_update(ctx);
 		// These were allocated by libkeyutils, must be freed
 		free(ppblobtext);
 		free(sskeytext);
 		if (ret != 0) {
-			perror("bootinfo_bootvar_set");
+			perror("bootinfo_update");
 			bootinfo_close(ctx);
 			return 1;
 		}

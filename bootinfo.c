@@ -432,12 +432,12 @@ find_bootinfo (bool readonly, struct devinfo_context **ctxp, const char *devinfo
 } /* find_bootinfo */
 
 /*
- * update_bootinfo
+ * bootinfo_update
  *
  * Write out a device info block based on the current context.
  */
-static int
-update_bootinfo (struct devinfo_context *ctx)
+int
+bootinfo_update (struct devinfo_context *ctx)
 {
 	uint32_t *crcptr;
 	struct device_info *info;
@@ -491,7 +491,7 @@ update_bootinfo (struct devinfo_context *ctx)
 
 	return 0;
 
-} /* update_bootinfo */
+} /* bootinfo_update */
 
 /*
  * close_bootinfo
@@ -666,7 +666,7 @@ bootinfo_open (struct devinfo_context **ctxp, unsigned int flags)
 	ctx->vars = preserve_list;
 	*ctxp = ctx;
 	free(buf);
-	return update_bootinfo(ctx);
+	return bootinfo_update(ctx);
 
   error_depart:
 	if (fd >= 0)
@@ -711,7 +711,7 @@ bootinfo_mark_successful (struct devinfo_context *ctx,
 		if (failed_boot_count != NULL)
 			*failed_boot_count = ctx->curinfo.failed_boots;
 		ctx->curinfo.failed_boots = 0;
-		ret = update_bootinfo(ctx);
+		ret = bootinfo_update(ctx);
 	}
 
 	return ret;
@@ -749,7 +749,7 @@ bootinfo_mark_in_progress (struct devinfo_context *ctx,
 			ctx->curinfo.flags |= FLAG_BOOT_IN_PROGRESS;
 		if (failed_boot_count != NULL)
 			*failed_boot_count = ctx->curinfo.failed_boots;
-		ret = update_bootinfo(ctx);
+		ret = bootinfo_update(ctx);
 	}
 	return ret;
 
@@ -878,6 +878,8 @@ bootinfo_bootvar_get (struct devinfo_context *ctx,
  *
  * Sets or deletes a variable. To delete, either pass NULL as
  * the value pointer, or use a null string as the value.
+ * Caller must call bootinfo_update() to finalize the set
+ * before freeing the name or value strings.
  *
  */
 int
@@ -930,21 +932,19 @@ bootinfo_bootvar_set (struct devinfo_context *ctx, const char *name,
 		}
 	}
 
-	if (strlen(name) >= sizeof(ctx->namebuf)) {
+	if (strlen(name) >= DEVINFO_BLOCK_SIZE) {
 		errno = ENAMETOOLONG;
 		return -1;
 	}
 
-	strcpy(ctx->namebuf, name);
 	if (value != NULL) {
 		size_t vallen = strlen(value);
 		size_t s = strlen(name) + vallen + 2;
-		if (vallen >= sizeof(ctx->valuebuf) ||
-		    ctx->varsize + s > sizeof(ctx->valuebuf)) {
+		if (vallen >= MAX_VALUE_SIZE ||
+		    ctx->varsize + s > MAX_VALUE_SIZE) {
 			errno = EMSGSIZE;
 			return -1;
 		}
-		strcpy(ctx->valuebuf, value);
 	}
 
 	for (var = ctx->vars, prev = NULL;
@@ -959,8 +959,8 @@ bootinfo_bootvar_set (struct devinfo_context *ctx, const char *name,
 		var = calloc(1, sizeof(struct info_var));
 		if (var == NULL)
 			return -1;
-		var->name = ctx->namebuf;
-		var->value = ctx->valuebuf;
+		var->name = (char *) name;
+		var->value = (char *) value;
 		/* Add to end of list */
 		if (prev == NULL)
 			ctx->vars = var;
@@ -975,10 +975,8 @@ bootinfo_bootvar_set (struct devinfo_context *ctx, const char *name,
 		free(var);
 	} else
 		/* Changing value of found variable */
-		var->value = ctx->valuebuf;
+		var->value = (char *) value;
 
-	if (update_bootinfo(ctx) < 0)
-		return -1;
 	return 0;
 
 } /* bootinfo_bootvar_set */

@@ -21,6 +21,7 @@ int bootinfo_extension_sectors(bootinfo_ctx_t *ctx);
 int bootinfo_bootvar_iterate(bootinfo_ctx_t *ctx, void **iterctx, char **name, char **value);
 int bootinfo_bootvar_get(bootinfo_ctx_t *ctx, const char *name, char **value);
 int bootinfo_bootvar_set(bootinfo_ctx_t *ctx, const char *name, const char *value);
+int bootinfo_update(bootinfo_ctx_t *ctx);
 void bootinfo_close(bootinfo_ctx_t *ctx);
 
 #endif /* bootinfo_h_included */

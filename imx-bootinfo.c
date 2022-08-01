@@ -317,6 +317,10 @@ set_bootvar (const char *name, const char *value, char *inputfile)
 		perror("bootinfo_bootvar_set");
 		ret = 1;
 	}
+	if (bootinfo_update(ctx) < 0) {
+		perror("bootinfo_update");
+		ret = 1;
+	}
 	bootinfo_close(ctx);
 	return ret;
 
