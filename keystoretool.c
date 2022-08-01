@@ -2,21 +2,18 @@
 /*
  * keystoretool.c
  *
- * Uses the CAAM to encrypt/decrypt a passphrase for
- * use with DM-Crypt/cryptsetup.
+ * Sets up a passphrase in the kernel keyring, using a
+ * secure/trusted master key backing an encrypted key
+ * for the passphrase, for use with dm-crypt.
  *
  * Command line options are a superset of the keystoretool
  * implementation for Tegra platforms from
  *   https://github.com/madisongh/keystore
  * but the underlying implementation is for the i.MX SoCs,
- * using the CAAM's "black key" feature and key blobbing
- * feature to encrypt a unique per-device passphrase.
- * The encrypted blob can only be decrypted on the device
- * where it was generated.
- *
- * Note that this implementation requires the downstream
- * NXP BSP, as it uses the (rather horrible) CAAM ioctl API
- * that is provided in that kernel.
+ * using (a patched NXP downstream 5.4 kernel) the
+ * CONFIG_SECURE_KEYS and CONFIG_ENCRYPTED_KEYS kernel
+ * config options, which use CAAM key blobbing to wrap
+ * the keys when they are exported to userland.
  *
  * Copyright (c) 2022, Matthew Madison
  */
@@ -33,41 +30,34 @@
 #include <getopt.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/ioctl.h>
-#include <imx/linux/caam_keygen.h>
+#include <keyutils.h>
 #include "bootinfo.h"
 
-#define stringify(x_) makestring(x_)
-#define makestring(x_) #x_
+typedef int (*option_routine_t)(void);
 
-typedef int (*option_routine_t)(int fd, FILE *outf);
-
-#define RED_KEY_SIZE		16
-#define RED_KEY_SIZE_MAX	64
-/* CCM adds 6-byte nonce and 6-byte IV */
-#define CCM_INFO_SIZE		12
-#define TAG_HEADER_SIZE		20
-#define BLACK_KEY_BUF_SIZE	(RED_KEY_SIZE_MAX+CCM_INFO_SIZE+TAG_HEADER_SIZE)
-/* blobbing inserts a key and MAC tag */
-#define BLOB_OVERHEAD		48
-#define BLOB_BUF_SIZE		(BLACK_KEY_BUF_SIZE+BLOB_OVERHEAD)
-
+#define SSKEY_VARNAME "_ss_key"
+#define SSKEY_NAME    "sskey"
 #define DMCPP_VARNAME "_dmc_passphrase"
+#define DMCPP_NAME    "dmcryptpp"
 
 static struct option options[] = {
 	{ "dmc-passphrase",	no_argument,		0, 'p' },
 	{ "file-passphrase",	no_argument,		0, 'f' },
 	{ "bootdone",		no_argument,		0, 'b' },
+	{ "generate",           no_argument,            0, 'g' },
 	{ "output",             required_argument,	0, 'o' },
 	{ "help",		no_argument,		0, 'h' },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":pfbo:h";
+static const char *shortopts = ":pfbgo:h";
 
 static char *optarghelp[] = {
 	"--dmc-passphrase     ",
 	"--file-passphrase    ",
 	"--bootdone           ",
+	"--generate           ",
 	"--output             ",
 	"--help               ",
 };
@@ -76,23 +66,13 @@ static char *opthelp[] = {
 	"extract the dmcrypt passphrase",
 	"extract the file passphrase",
 	"set booting complete",
+	"force generation of new passphrase",
 	"file to write the passphrase to instead of stdout",
 	"display this help text"
 };
 
+static bool force_generate = false;
 
-/*
- * printhex
- *
- * Print a string of bytes as hexadecimal
- */
-static void
-printhex (FILE *of, uint8_t *buf, int buflen)
-{
-	for (; buflen > 0; buf++, buflen--)
-		fprintf(of, "%02X", *buf);
-	fprintf(of, "\n");
-}
 
 /*
  * print_usage
@@ -115,165 +95,144 @@ print_usage (void)
 } /* print_usage */
 
 /*
- * generate_passphrase
+ * setup_passphrase
  *
- * Generates a random passphrase, encrypted
+ * Installs (or creates) the secure storage key and passphrase
+ * into the kernel keyring for the current UID.
  *
- * returns length of blob on success, negative value on error.
+ * returns 0 on success, negative number on error.
  */
 static int
-generate_passphrase (int fd, uint8_t *blob_buf, size_t blob_buf_size, size_t *blob_len)
+setup_passphrase (bool generate, char **sskeyptr, char **dmcppptr)
 {
-	struct caam_keygen_cmd keygen_params = { 0 };
-	uint8_t *black_key = NULL;
-	int ret;
+	key_serial_t ssk, dmcpp;
+	void *keybuf;
+	char payload[1024];
+	static const char loadcmd[] = "load ";
 
-	black_key = calloc(1, BLACK_KEY_BUF_SIZE);
-	if (black_key == NULL) {
-		perror("calloc");
-		return -1;
+	ssk = find_key_by_type_and_desc("secure", SSKEY_NAME, KEY_SPEC_USER_KEYRING);
+	if (ssk < 0) {
+		if (!generate && *sskeyptr != NULL) {
+			if (strlen(*sskeyptr) + sizeof(loadcmd) >= sizeof(payload)) {
+				errno = EINVAL;
+				return -1;
+			}
+			snprintf(payload, sizeof(payload)-1, "%s%s", loadcmd, *sskeyptr);
+			payload[sizeof(payload)-1] = '\0';
+		} else
+			strcpy(payload, "new 32");
+		/*
+		 * Default permissions on a key in the user keyring only grants read/write/etc. permission
+		 * to the possessor of a key, so we have to create it in the session keyring, change
+		 * the permissions and link the key to the user keyring so it can be used by other
+		 * processes/
+		 */
+		ssk = add_key("secure", SSKEY_NAME, payload, strlen(payload), KEY_SPEC_SESSION_KEYRING);
+		if (ssk < 0)
+			return -1;
+		if (keyctl_setperm(ssk, KEY_POS_ALL|KEY_USR_ALL|KEY_GRP_VIEW|KEY_GRP_SEARCH|KEY_OTH_VIEW|KEY_OTH_SEARCH) < 0)
+			return -1;
+		if (keyctl_link(ssk, KEY_SPEC_USER_KEYRING) < 0)
+			return -1;
+	} else {
+		/*
+		 * We have to link the secure key into the session keyring to
+		 * read it or to use the encrypted key (which is encrypted with it)
+		 */
+		keyctl_link(ssk, KEY_SPEC_SESSION_KEYRING);
 	}
-	keygen_params.key_enc_len = 4; // includes null terminator
-	keygen_params.key_enc = (uintptr_t) "ecb";
-	keygen_params.key_mode_len = 3; // includes null terminator
-	keygen_params.key_mode = (uintptr_t) "-s"; // s is for 'size'
-	keygen_params.key_value_len = 3;
-	keygen_params.key_value = (uintptr_t) stringify(RED_KEY_SIZE); // length we want for the random key
-	keygen_params.black_key_len = BLACK_KEY_BUF_SIZE;
-	keygen_params.black_key = (uintptr_t) black_key;
-	keygen_params.blob_len = blob_buf_size;
-	keygen_params.blob = (uintptr_t) blob_buf;
-
-	ret = ioctl(fd, CAAM_KEYGEN_IOCTL_CREATE, &keygen_params);
-	free(black_key);
-	if (ret != 0)
+	if (keyctl_read_alloc(ssk, &keybuf) < 0)
 		return -1;
-	*blob_len = keygen_params.blob_len;
+	if (generate || *sskeyptr == NULL)
+		*sskeyptr = keybuf;
+	else if (strcmp(*sskeyptr, keybuf) != 0) {
+		errno = EIO;
+		fputs("Error: secure storage key mismatch with keyring\n", stderr);
+		free(keybuf);
+		return -1;
+	} else
+		free(keybuf);
+
+	dmcpp = find_key_by_type_and_desc("encrypted", DMCPP_NAME, KEY_SPEC_USER_KEYRING);
+	if (dmcpp < 0) {
+		if (!generate && *dmcppptr != NULL) {
+		        if (strlen(*dmcppptr) + sizeof(loadcmd) >= sizeof(payload)) {
+				errno = EINVAL;
+				return -1;
+			}
+			snprintf(payload, sizeof(payload)-1, "%s%s", loadcmd, *dmcppptr);
+			payload[sizeof(payload)-1] = '\0';
+		} else
+			strcpy(payload, "new default secure:" SSKEY_NAME " 32");
+		dmcpp = add_key("encrypted", DMCPP_NAME, payload, strlen(payload), KEY_SPEC_SESSION_KEYRING);
+		if (dmcpp < 0)
+			return -1;
+		if (keyctl_setperm(dmcpp, KEY_POS_ALL|KEY_USR_ALL|KEY_GRP_VIEW|KEY_GRP_SEARCH|KEY_OTH_VIEW|KEY_OTH_SEARCH) < 0)
+			return -1;
+		if (keyctl_link(dmcpp, KEY_SPEC_USER_KEYRING) < 0)
+			return -1;
+	}
+	if (keyctl_read_alloc(dmcpp, &keybuf) < 0)
+		return -1;
+	if (generate || *dmcppptr == NULL)
+		*dmcppptr = keybuf;
+	else if (strcmp(*dmcppptr, keybuf) != 0) {
+		errno = EIO;
+		fputs("Error: passphrase mismatch with keyring\n", stderr);
+		free(keybuf);
+		return -1;
+	} else
+		free(keybuf);
 	return 0;
 
-} /* generate_passphrase */
-
-/*
- * extract_passphrase
- *
- * Extracts a decrypted passphrase from a blob.
- *
- * returns 0 on success, non-0 on failure.
- */
-static int
-extract_passphrase (int fd, uint8_t *blob, size_t blob_size, FILE *outf)
-{
-	struct caam_keygen_cmd keygen_params = { 0 };
-	uint8_t *black_key = NULL;
-	int ret;
-
-	black_key = calloc(1, BLACK_KEY_BUF_SIZE);
-	if (black_key == NULL) {
-		perror("calloc");
-		return -1;
-	}
-	keygen_params.black_key_len = BLACK_KEY_BUF_SIZE;
-	keygen_params.black_key = (uintptr_t) black_key;
-
-	keygen_params.blob_len = blob_size;
-	keygen_params.blob = (uintptr_t) blob;
-
-	ret = ioctl(fd, CAAM_KEYGEN_IOCTL_IMPORT, &keygen_params);
-	if (ret != 0) {
-		free(black_key);
-		return -1;
-	}
-
-	printhex(outf, black_key + TAG_HEADER_SIZE, (int) keygen_params.black_key_len - TAG_HEADER_SIZE);
-	free(black_key);
-	return 0;
-
-} /* extract_passphrase */
+} /* setup_passphrase */
 
 /*
  * get_passphrase
  *
- * Retrieves the passphrase blob from boot variable storage, or generates a new
- * one (storing it), then extracts the decrypted passphrase to the output file.
+ * Retrieves the secure storage key and dm-crypt passphrase hex blobs from
+ * boot variable storage (if present) and installs them in the user keyring,
+ * or generates new ones if '-g' is used, or if one of the keys is missing.
  */
 static int
-get_passphrase (int caamfd, FILE *outf)
+get_passphrase (void)
 {
-	static const char hexdigits[] = "0123456789ABCDEF";
 	bootinfo_ctx_t *ctx;
-	uint8_t *blob_buf = calloc(1, BLOB_BUF_SIZE);
-	char *ppblobtext;
-	char *blobtext = NULL;
-	size_t bloblen = 0;
-	int ret = 0;
-	unsigned int i, j;
-
-	if (blob_buf == NULL) {
-		perror("calloc");
-		bootinfo_close(ctx);
-		return 1;
-	}
+	char *sskeytext = NULL, *ppblobtext = NULL;
+	bool generate = force_generate;
 
 	if (bootinfo_open(&ctx, 0) < 0) {
 		perror("bootinfo_open");
-		free(blob_buf);
 		return 1;
 	}
-	if (bootinfo_bootvar_get(ctx, DMCPP_VARNAME, &ppblobtext) < 0) {
-		if (generate_passphrase(caamfd, blob_buf, BLOB_BUF_SIZE, &bloblen) < 0) {
+	if (!generate)
+		generate = (bootinfo_bootvar_get(ctx, SSKEY_VARNAME, &sskeytext) < 0 ||
+			    bootinfo_bootvar_get(ctx, DMCPP_VARNAME, &ppblobtext) < 0);
+	if (generate) {
+		int ret;
+		if (setup_passphrase(true, &sskeytext, &ppblobtext) < 0) {
 			perror("generate_passphrase");
-			free(blob_buf);
 			bootinfo_close(ctx);
 			return 1;
 		}
-		blobtext = calloc(1, bloblen*2 + 1);
-		if (blobtext == NULL) {
-			perror("calloc");
-			free(blob_buf);
-			bootinfo_close(ctx);
-			return 1;
-		}
-		// Variables can only hold printable characters, so just hex encode
-		for (i = 0; i < bloblen; i++) {
-			blobtext[i*2]   = hexdigits[(blob_buf[i] >> 4) & 0x0F];
-			blobtext[i*2+1] = hexdigits[blob_buf[i] & 0x0F];
-		}
-		if (bootinfo_bootvar_set(ctx, DMCPP_VARNAME, blobtext) < 0) {
+		ret = bootinfo_bootvar_set(ctx, DMCPP_VARNAME, ppblobtext);
+		if (ret == 0)
+			ret = bootinfo_bootvar_set(ctx, SSKEY_VARNAME, sskeytext);
+		// These were allocated by libkeyutils, must be freed
+		free(ppblobtext);
+		free(sskeytext);
+		if (ret != 0) {
 			perror("bootinfo_bootvar_set");
-			free(blobtext);
 			bootinfo_close(ctx);
 			return 1;
 		}
-	} else {
-		size_t textlen = strlen(ppblobtext);
-		if (textlen > BLOB_BUF_SIZE*2 || (textlen % 2) != 0) {
-			fprintf(stderr, "Error: unrecognized passphrase blob found in variable store\n");
-			free(blob_buf);
-			bootinfo_close(ctx);
-			return 1;
-		}
-		bloblen = textlen / 2;
-		for (i = 0, j = 0; i < textlen; i += 2, j += 1) {
-			char *cp1 = strchr(hexdigits, ppblobtext[i]);
-			char *cp2 = strchr(hexdigits, ppblobtext[i+1]);
-
-			if (cp1 == NULL || cp2 == NULL) {
-				fprintf(stderr, "Error: unrecognized passphrase blob found in variable store\n");
-				free(blob_buf);
-				bootinfo_close(ctx);
-				return 1;
-			}
-			blob_buf[j] = ((cp1-hexdigits) << 4) | (cp2-hexdigits);
-		}
+	} else if (setup_passphrase(false, &sskeytext, &ppblobtext) < 0) {
+		perror("setup_passphrase");
+		bootinfo_close(ctx);
+		return 1;
 	}
-
-	if (extract_passphrase(caamfd, blob_buf, bloblen, outf) != 0) {
-		perror("extract_passphrase");
-		ret = 1;
-	}
-	if (blobtext != NULL)
-		free(blobtext);
-	return ret;
+	bootinfo_close(ctx);
+	return 0;
 
 } /* get_passphrase */
 
@@ -283,7 +242,7 @@ get_passphrase (int caamfd, FILE *outf)
 int
 main (int argc, char * const argv[])
 {
-	int c, which, ret, caamfd;
+	int c, which, ret;
 	option_routine_t dispatch = NULL;
 	char *outfile = NULL;
 	FILE *outf = stdout;
@@ -311,6 +270,9 @@ main (int argc, char * const argv[])
 				/* No-op on this platform */
 				return 0;
 				break;
+			case 'g':
+				force_generate = true;
+				break;
 			case 'o':
 				outfile = strdup(optarg);
 				break;
@@ -333,17 +295,10 @@ main (int argc, char * const argv[])
 		return 1;
 	}
 
-	caamfd = open("/dev/caam-keygen", O_RDWR);
-	if (caamfd < 0) {
-		perror("/dev/caam-keygen");
-		return 1;
-	}
-
 	if (outfile != NULL && dispatch == get_passphrase) {
 		int fd = open(outfile, O_CREAT|O_WRONLY|O_TRUNC, S_IRUSR|S_IWUSR);
 		if (fd < 0) {
 			perror(outfile);
-			close(caamfd);
 			return 1;
 		}
 		outf = fdopen(fd, "w");
@@ -351,13 +306,11 @@ main (int argc, char * const argv[])
 			perror(outfile);
 			close(fd);
 			unlink(outfile);
-			close(caamfd);
 			return 1;
 		}
 	}
 
-	ret = dispatch(caamfd, outf);
-	close(caamfd);
+	ret = dispatch();
 	if (outf != stdout) {
 		if (fclose(outf) == EOF) {
 			perror(outfile);

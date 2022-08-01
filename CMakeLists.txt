@@ -14,6 +14,7 @@ set(LKDIRGROUP "root" CACHE STRING "Group owner for lock directory")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
+pkg_check_modules(KEYUTILS REQUIRED IMPORTED_TARGET libkeyutils)
 pkg_get_variable(TMPFILESDIR systemd tmpfilesdir)
 
 configure_file(config-files/imx-bootinfo.conf.in imx-bootinfo.conf @ONLY)
@@ -24,6 +25,6 @@ target_compile_definitions(imx-bootinfo PUBLIC VERSION="${PROJECT_VERSION}")
 target_link_libraries(imx-bootinfo PUBLIC PkgConfig::ZLIB)
 
 add_executable(keystoretool keystoretool.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
-target_link_libraries(keystoretool PUBLIC PkgConfig::ZLIB)
+target_link_libraries(keystoretool PUBLIC PkgConfig::KEYUTILS PkgConfig::ZLIB)
 
 install(TARGETS imx-bootinfo keystoretool RUNTIME)
