@@ -36,6 +36,7 @@ typedef enum {
 #define OTP_BOOTCFG_WORD_COUNT 5
 
 ssize_t otp_bootcfg_read(otpctx_t ctx, uint32_t *fusewords, size_t sizeinwords);
+int otp_bootcfg_update(otpctx_t ctx, uint32_t *fusewords, size_t sizeinwords);
 int otp_bootcfg_bool_get(uint32_t *fusewords, size_t sizeinwords,
 			 otp_boot_cfg_id_t id, bool *value);
 int otp_bootcfg_wdog_get(uint32_t *fusewords, size_t sizeinwords,

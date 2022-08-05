@@ -76,6 +76,36 @@ otp_bootcfg_read (otpctx_t ctx, uint32_t *fusewords, size_t sizeinwords)
 } /* otp_bootcfg_read */
 
 /*
+ * otp_bootcfg_update
+ *
+ * Updates the BOOT_CFGx fuse words. The size of the fuse word
+ * vector must exactly match the size in the fuse box.
+ */
+int
+otp_bootcfg_update (otpctx_t ctx, uint32_t *newvals, size_t sizeinwords)
+{
+	ssize_t count;
+	uint32_t curvals[OTP_BOOTCFG_WORD_COUNT];
+
+	if (ctx == NULL || newvals == NULL || sizeinwords != OTP_BOOTCFG_WORD_COUNT) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	for (count = 0; count < OTP_BOOTCFG_WORD_COUNT; count += 1)
+		if (otp___fuseword_read(ctx, bootcfg_fuses[count], &curvals[count]) < 0)
+			return -1;
+	for (count = 0; count < OTP_BOOTCFG_WORD_COUNT; count += 1) {
+		if (curvals[count] == newvals[count])
+			continue;
+		if (otp___fuseword_write(ctx, bootcfg_fuses[count], newvals[count]) < 0)
+			return -1;
+	}
+	return 0;
+
+} /* otp_bootcfg_update */
+
+/*
  * otp_bootcfg_bool_get
  *
  * Extracts the setting of a boolean (1-bit) fuse in the
