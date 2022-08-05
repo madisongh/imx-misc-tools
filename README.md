@@ -1,5 +1,5 @@
-# imx-boot-tools
-This repository contains boot-related tools for i.MX8 platforms.
+# imx-misc-tools
+This repository contains miscellaneous boot-related tools for i.MX8 platforms.
 
 Derived from [tegra-boot-tools](https://github.com/OE4T/tegra-boot-tools).
 
