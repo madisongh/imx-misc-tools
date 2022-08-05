@@ -27,40 +27,44 @@ static uint32_t desired_srk_hash[8];
 static bool     have_srk_hash = false;
 static uint32_t null_hash[8] = { 0 };
 static char *progname;
+static bool opt_quiet = false;
 
 typedef int (*option_routine_t)(otpctx_t ctx, int argc, char * const argv[]);
-static int do_program(otpctx_t ctx, int argc, char * const argv[]);
+static int do_check_secure(otpctx_t ctx, int argc, char * const argv[]);
+static int do_secure(otpctx_t ctx, int argc, char * const argv[]);
 static int do_show(otpctx_t ctx, int argc, char * const argv[]);
-static int do_lock(otpctx_t ctx, int argc, char * const argv[]);
 
 static struct {
 	const char *cmd;
 	option_routine_t rtn;
 	const char *help;
 } commands[] = {
-        { "program",    do_program,    "program fuses" },
-        { "show",       do_show,       "show fuses" },
-        { "lock",       do_lock,       "lock fuses" },
+        { "is-secured", do_check_secure, "check fuses are set for secure boot" },
+        { "secure",     do_secure,       "program fuses for secure boot" },
+        { "show",       do_show,         "show fuses" },
 };
 
 static struct option options[] = {
 	{ "device",		required_argument,	0, 'd' },
 	{ "fuse-file",		required_argument,	0, 'f' },
 	{ "help",		no_argument,		0, 'h' },
+	{ "quiet",		no_argument,		0, 'q' },
 	{ 0,			0,			0, 0   }
 };
-static const char *shortopts = ":d:f:ch";
+static const char *shortopts = ":d:f:chq";
 
 static char *optarghelp[] = {
 	"--device             ",
 	"--fuse-file          ",
 	"--help               ",
+	"--quiet              ",
 };
 
 static char *opthelp[] = {
 	"path to the OCOTP nvmem device",
 	"path to the SRK_1_2_3_4_fuse.bin file",
 	"display this help text",
+	"omit prompts and information displays",
 };
 
 
@@ -72,10 +76,10 @@ print_usage (void)
 	printf("\t%s [<option>] <command> [fuse] [arg...]\n\n", progname);
 	printf("Commands:\n");
 	for (i = 0; i < sizeof(commands)/sizeof(commands[0]); i++)
-		printf(" %s\t\t%s\n", commands[i].cmd, commands[i].help);
+		printf(" %-20.20s %s\n", commands[i].cmd, commands[i].help);
 	printf("Options:\n");
 	for (i = 0; i < sizeof(options)/sizeof(options[0]) && options[i].name != 0; i++) {
-		printf(" %s\t%c%c\t%s\n",
+		printf(" %-20.20s %c%c        %s\n",
 		       optarghelp[i],
 		       (options[i].val == 0 ? ' ' : '-'),
 		       (options[i].val == 0 ? ' ' : options[i].val),
@@ -83,6 +87,7 @@ print_usage (void)
 	}
 
 } /* print_usage */
+
 
 /*
  * do_show
@@ -95,8 +100,10 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 {
 	uint32_t srk_hash[SRK_FUSE_COUNT];
 	uint32_t bootcfg[OTP_BOOTCFG_WORD_COUNT];
-	bool val;
-	unsigned int i;
+	uint32_t locks;
+	otp_lockstate_t lstate;
+	bool val, wd_enabled;
+	unsigned int i, wd_timeout;
 
 	static struct {
 		otp_boot_cfg_id_t id;
@@ -109,7 +116,14 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 		{ OTP_BOOT_CFG_WDOG_ENABLE, "Watchdog enabled:" },
 		{ OTP_BOOT_CFG_TZASC_ENABLE,"TZASC enabled:" },
 	};
-	
+	static const char *lstate_label[OTP_LOCKSTATE_COUNT] = {
+		[OTP_LOCKSTATE_UNLOCKED] = "unlocked",
+		[OTP_LOCKSTATE_LOCKED] = "locked",
+		[OTP_LOCKSTATE_O_PROTECT] = "override-protected",
+		[OTP_LOCKSTATE_W_PROTECT] = "write-protected",
+		[OTP_LOCKSTATE_OW_PROTECT] = "locked",
+	};
+
 	if (otp_srk_read(ctx, srk_hash, SRK_FUSE_COUNT) < 0) {
 		perror("otp_srk_read");
 		return 1;
@@ -118,18 +132,35 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 		perror("otp_bootcfg_read");
 		return 1;
 	}
+	if (otp_bootcfg_wdog_get(bootcfg, OTP_BOOTCFG_WORD_COUNT, &wd_enabled, &wd_timeout) < 0) {
+		perror("otp_bootcfg_wdog_get");
+		return 1;
+	}
+	if (otp_locks_read(ctx, &locks) < 0) {
+		perror("otp_locks_read");
+		return 1;
+	}
 
-	for (i = 0; i < SRK_FUSE_COUNT; i++)
-		printf("SRK_HASH[%d]: %08x\n", i, srk_hash[i]);
-	putchar('\n');
+	if (otp_lockstate_get(locks, OTP_LOCK_SRK, &lstate) < 0) {
+		perror("otp_lockstate_get");
+		return 1;
+	}
+
+	printf("%-32.32s ", "SRK hashes:");
 	if (memcmp(srk_hash, null_hash, sizeof(srk_hash)) == 0)
-		printf("No SRK hashes programmed.\n");
+		printf("not set, %s\n", lstate_label[lstate]);
 	else if (have_srk_hash) {
 		if (memcmp(srk_hash, desired_srk_hash, sizeof(srk_hash)) == 0)
-			printf("SRK fuses match desired programming.\n");
-		else
-			printf("SRK fuses DO NOT MATCH desired programming.\n");
-	}
+			printf("correctly programmed, %s\n", lstate_label[lstate]);
+		else {
+			printf("MISMATCH, %s\n", lstate_label[lstate]);
+			for (i = 0; i < SRK_FUSE_COUNT; i++)
+				if (srk_hash[i] != desired_srk_hash[i])
+					printf("    SRK_HASH[%d]: actual=0x%08x desired=0x%08x\n",
+					       i, srk_hash[i], desired_srk_hash[i]);
+		}
+	} else
+		printf("non-null, %s\n", lstate_label[lstate]);
 
 	for (i = 0; i < sizeof(bootcfg_fuses)/sizeof(bootcfg_fuses[0]); i++) {
 		if (otp_bootcfg_bool_get(bootcfg, OTP_BOOTCFG_WORD_COUNT,
@@ -138,7 +169,15 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 			return 1;
 		}
 		printf("%-32.32s %s\n", bootcfg_fuses[i].label, (val ? "YES" : "NO"));
+		if (i == OTP_BOOT_CFG_WDOG_ENABLE)
+			printf("%-32.32s %u sec\n", "Watchdog timeout:", wd_timeout);
 	}
+
+	if (otp_lockstate_get(locks, OTP_LOCK_BOOT_CFG, &lstate) < 0) {
+		perror("otp_lockstate_get");
+		return 1;
+	}
+	printf("%-32.32s %s\n", "Boot configuration fuses", lstate_label[lstate]);
 
 	return 0;
 
@@ -146,26 +185,132 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 
 
 /*
- * do_program
+ * do_secure
  */
 static int
-do_program (otpctx_t ctx, int argc, char * const argv[])
+do_secure (otpctx_t ctx, int argc, char * const argv[])
 {
-	printf("TBD\n");
+	uint32_t srk_hash[SRK_FUSE_COUNT];
+	uint32_t bootcfg[OTP_BOOTCFG_WORD_COUNT];
+	uint32_t locks;
+	otp_lockstate_t lstate;
+	bool val;
+	unsigned int i;
+
+	if (!have_srk_hash) {
+		fprintf(stderr, "ERR: securing device requires fuse file\n");
+		return 1;
+	}
+	if (otp_srk_read(ctx, srk_hash, SRK_FUSE_COUNT) < 0) {
+		perror("otp_srk_read");
+		return 1;
+	}
+	if (memcmp(srk_hash, desired_srk_hash, sizeof(srk_hash)) == 0) {
+		if (!opt_quiet)
+			printf("SRK fuses already programmed correctly.\n");
+	} else {
+		// Check for a misprogrammed hash. If the fuses were partially programmed
+		// with the desired SRK hashes (some still zero), that's OK.
+		for (i = 0; i < SRK_FUSE_COUNT && (srk_hash[i] == 0 || srk_hash[i] == desired_srk_hash[i]); i++);
+		if (i < SRK_FUSE_COUNT) {
+			fprintf(stderr, "ERR: SRK fuses already programmed with different hashes\n");
+			return 1;
+		}
+		if (!opt_quiet)
+			printf("Programming SRK fuses.\n");
+		if (otp_srk_write(ctx, desired_srk_hash, SRK_FUSE_COUNT) < 0) {
+			perror("otp_srk_write");
+			return 1;
+		}
+		if (!opt_quiet)
+			printf("Programmed SRK fuses.\n");
+	}
+	if (otp_locks_read(ctx, &locks) < 0) {
+		perror("otp_locks_read");
+		return 1;
+	}
+	if (otp_lockstate_get(locks, OTP_LOCK_SRK, &lstate) < 0) {
+		perror("otp_lockstate_get");
+		return 1;
+	}
+	if (lstate == OTP_LOCKSTATE_LOCKED) {
+		if (!opt_quiet)
+			printf("SRK fuses already locked.\n");
+	} else if (lstate == OTP_LOCKSTATE_UNLOCKED) {
+		if (!opt_quiet)
+			printf("Locking SRK fuses.\n");
+		if (otp_lockstate_set(OTP_LOCK_SRK, OTP_LOCKSTATE_LOCKED, &locks) < 0) {
+			perror("otp_lockstate_set");
+			return 1;
+		}
+		if (otp_locks_update(ctx, locks) < 0) {
+			perror("otp_locks_update");
+			return 1;
+		}
+		if (!opt_quiet)
+			printf("Locked SRK fuses.\n");
+	} else {
+		fprintf(stderr, "ERR: unknown SRK lockstate: %u\n", lstate);
+		return 1;
+	}
+
+	if (otp_bootcfg_read(ctx, bootcfg, OTP_BOOTCFG_WORD_COUNT) < 0) {
+		perror("otp_bootcfg_read");
+		return 1;
+	}
+	if (otp_bootcfg_bool_get(bootcfg, OTP_BOOTCFG_WORD_COUNT,
+				 OTP_BOOT_CFG_SEC_CONFIG, &val) < 0) {
+		perror("otp_bootcfg_bool_get");
+		return 1;
+	}
+	if (val) {
+		if (!opt_quiet)
+			printf("SEC_CONFIG fuse already programmed.\n");
+	} else {
+		if (!opt_quiet)
+			printf("Programming SEC_CONFIG fuse.\n");
+		if (otp_bootcfg_bool_set(bootcfg, OTP_BOOTCFG_WORD_COUNT,
+					 OTP_BOOT_CFG_SEC_CONFIG, true) < 0) {
+			perror("otp_bootcfg_bool_set");
+			return 1;
+		}
+		if (otp_bootcfg_update(ctx, bootcfg, OTP_BOOTCFG_WORD_COUNT) < 0) {
+			perror("otp_bootcfg_update");
+			return 1;
+		}
+		if (!opt_quiet)
+			printf("SEC_CONFIG fuse programmed.\n");
+	}
+
 	return 0;
 
-} /* do_program */
+} /* do_secure */
 
 /*
- * do_lock
+ * do_check_secure
  */
 static int
-do_lock (otpctx_t ctx, int argc, char * const argv[])
+do_check_secure (otpctx_t ctx, int argc, char * const argv[])
 {
-	printf("TBD\n");
-	return 0;
+	uint32_t bootcfg[OTP_BOOTCFG_WORD_COUNT];
+	bool enabled;
 
-} /* do_lock */
+	if (otp_bootcfg_read(ctx, bootcfg, OTP_BOOTCFG_WORD_COUNT) < 0) {
+		perror("otp_bootcfg_read");
+		return 1;
+	}
+	if (otp_bootcfg_bool_get(bootcfg, OTP_BOOTCFG_WORD_COUNT,
+				 OTP_BOOT_CFG_SEC_CONFIG, &enabled) < 0) {
+		if (!opt_quiet)
+			perror("otp_bootcfg_bool_get");
+		return errno;
+	}
+	if (!opt_quiet)
+		printf("Secure boot: %s\n", (enabled ? "ENABLED" : "DISABLED"));
+
+	return (enabled ? 0 : 1);
+
+} /* do_check_secure */
 
 /*
  * main program
@@ -176,7 +321,7 @@ main (int argc, char * const argv[])
 	int c, which, ret;
 	unsigned int cmd;
 	char *argv0_copy = strdup(argv[0]);
-	otpctx_t ctx;
+	otpctx_t ctx = NULL;
 	option_routine_t dispatch = NULL;
 	char *nvmem_path = NULL;
 	char *fuse_file = NULL;
@@ -199,6 +344,9 @@ main (int argc, char * const argv[])
 			break;
 		case 'f':
 			fuse_file = optarg;
+			break;
+		case 'q':
+			opt_quiet = true;
 			break;
 		default:
 			fprintf(stderr, "Error: unrecognized option\n");
@@ -228,7 +376,10 @@ main (int argc, char * const argv[])
 			ret = 1;
 			goto depart;
 		}
-		have_srk_hash = true;
+		if (memcmp(desired_srk_hash, null_hash, sizeof(desired_srk_hash)) == 0)
+			fprintf(stderr, "%s: ignoring, all SRK fuses are null\n", fuse_file);
+		else
+			have_srk_hash = true;
 	}
 
 	if (argc < 1) {
