@@ -8,6 +8,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -55,6 +56,32 @@ static off_t fuseword_offsets[] = {
 };
 
 /*
+ * is_compatible
+ *
+ * Sanity checks the SoC ID to make sure it's an i.MX8M Mini,
+ * since the fuse definitions here are only for that SoC.
+ */
+static bool
+is_compatible (void)
+{
+	int fd;
+	char socid[32];
+	ssize_t n;
+
+	fd = open("/sys/devices/soc0/soc_id", O_RDONLY);
+	if (fd < 0)
+		return false;
+	n = read(fd, socid, sizeof(socid));
+	close(fd);
+	if (n <= 0 || n >= (ssize_t) sizeof(socid))
+		return false;
+	// Change terminating \n to \0
+	socid[n-1] = '\0';
+	return strcmp(socid, "i.MX8MM") == 0;
+
+} /* is_compatible */
+
+/*
  * otp_context_open
  *
  * Set up a context for working with the fuses.
@@ -66,6 +93,11 @@ otp_context_open (const char *path, bool readonly, otpctx_t *ctxptr)
 
 	if (ctxptr == NULL) {
 		errno = EINVAL;
+		return -1;
+	}
+
+	if (!is_compatible()) {
+		errno = EFAULT;
 		return -1;
 	}
 
