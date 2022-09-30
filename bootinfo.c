@@ -593,9 +593,10 @@ bootinfo_open (struct devinfo_context **ctxp, unsigned int flags)
 	 * list.
 	 */
 	if (ctx != NULL) {
+		struct info_var *prev = NULL;
 		for (var = ctx->vars; var != NULL; var = var->next) {
 			if (*var->name == '_') {
-				struct info_var *varcopy, *prev = NULL;
+				struct info_var *varcopy;
 				size_t namelen = strlen(var->name);
 				size_t vallen = strlen(var->value);
 				varcopy = calloc(1, sizeof(*var) + namelen + vallen + 2);
@@ -609,7 +610,7 @@ bootinfo_open (struct devinfo_context **ctxp, unsigned int flags)
 				varcopy->value = varcopy->name + namelen + 1;
 				memcpy(varcopy->value, var->value, vallen);
 				if (prev == NULL)
-					preserve_list = varcopy;
+					prev = preserve_list = varcopy;
 				else
 					prev->next = varcopy;
 				prev = varcopy;
