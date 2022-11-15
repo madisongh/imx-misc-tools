@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.8)
 cmake_policy(SET CMP0048 NEW)
 
-project(imx_boot_tool LANGUAGES C VERSION 0.3.1)
+project(imx_boot_tool LANGUAGES C VERSION 0.3.2)
 
 include(GNUInstallDirs)
 
