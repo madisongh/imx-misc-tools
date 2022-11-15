@@ -317,16 +317,6 @@ find_bootinfo (bool readonly, struct devinfo_context **ctxp, const char *devinfo
 	ctx->readonly = readonly;
 	strcpy(ctx->devinfo_dev, devinfo_dev);
 
-	if (!ctx->readonly)
-		set_bootdev_writeable_status(ctx->devinfo_dev, true);
-
-	ctx->fd = open(devinfo_dev, (readonly ? O_RDONLY : O_RDWR|O_DSYNC));
-	if (ctx->fd < 0) {
-		if (!ctx->readonly)
-			set_bootdev_writeable_status(ctx->devinfo_dev, false);
-		free(ctx);
-		return -1;
-	}
 	dirfd = open("/run/imx-bootinfo", O_PATH);
 	if (dirfd < 0) {
 		if (mkdir("/run/imx-bootinfo", 02770) < 0) {
@@ -341,18 +331,23 @@ find_bootinfo (bool readonly, struct devinfo_context **ctxp, const char *devinfo
 	ctx->lockfd = openat(dirfd, "lockfile", O_CREAT|O_RDWR, 0770);
 	if (ctx->lockfd < 0) {
 		close(dirfd);
-		close(ctx->fd);
-		if (!ctx->readonly)
-			set_bootdev_writeable_status(ctx->devinfo_dev, false);
 		free(ctx);
 		return -1;
 	}
 	close(dirfd);
 	if (flock(ctx->lockfd, (readonly ? LOCK_SH : LOCK_EX)) < 0) {
 		close(ctx->lockfd);
-		close(ctx->fd);
+		free(ctx);
+		return -1;
+	}
+	if (!ctx->readonly)
+		set_bootdev_writeable_status(ctx->devinfo_dev, true);
+
+	ctx->fd = open(devinfo_dev, (readonly ? O_RDONLY : O_RDWR|O_DSYNC));
+	if (ctx->fd < 0) {
 		if (!ctx->readonly)
 			set_bootdev_writeable_status(ctx->devinfo_dev, false);
+		close(ctx->lockfd);
 		free(ctx);
 		return -1;
 	}
@@ -505,14 +500,14 @@ close_bootinfo (struct devinfo_context *ctx, bool keeplock)
 
 	if (ctx == NULL)
 		return lockfd;
+	if (!ctx->readonly)
+		set_bootdev_writeable_status(ctx->devinfo_dev, false);
+	if (ctx->fd >= 0)
+		close(ctx->fd);
 	if (keeplock)
 		lockfd = ctx->lockfd;
 	else if (ctx->lockfd >= 0)
 		close(ctx->lockfd);
-	if (ctx->fd >= 0)
-		close(ctx->fd);
-	if (!ctx->readonly)
-		set_bootdev_writeable_status(ctx->devinfo_dev, false);
 	ctx->fd = -1;
 	ctx->lockfd = -1;
 	free_vars(ctx->vars);
