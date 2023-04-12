@@ -11,6 +11,8 @@ include(GNUInstallDirs)
 set(CMAKE_C_STANDARD 11)
 
 set(LKDIRGROUP "root" CACHE STRING "Group owner for lock directory")
+set(STORAGE_DEV "/dev/mmcblk0boot1" CACHE STRING "Device for variable storage")
+set(STORAGE_OFFSET "0" CACHE STRING "Offset to start of variable storage")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
@@ -23,7 +25,10 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/imx-bootinfo.conf DESTINATION ${TMPFIL
 add_subdirectory(otp)
 
 add_executable(imx-bootinfo imx-bootinfo.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
-target_compile_definitions(imx-bootinfo PUBLIC VERSION="${PROJECT_VERSION}")
+target_compile_definitions(imx-bootinfo PUBLIC
+  VERSION="${PROJECT_VERSION}"
+  BOOTINFO_STORAGE_DEVICE="${STORAGE_DEV}"
+  BOOTINFO_STORAGE_OFFSET_A=${STORAGE_OFFSET})
 target_link_libraries(imx-bootinfo PUBLIC PkgConfig::ZLIB)
 
 add_executable(keystoretool keystoretool.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
