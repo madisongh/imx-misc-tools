@@ -10,12 +10,12 @@
  * implementation for Tegra platforms from
  *   https://github.com/madisongh/keystore
  * but the underlying implementation is for the i.MX SoCs,
- * using (a patched NXP downstream 5.4 kernel) the
- * CONFIG_SECURE_KEYS and CONFIG_ENCRYPTED_KEYS kernel
- * config options, which use CAAM key blobbing to wrap
- * the keys when they are exported to userland.
+ * using a kernel with either CONFIG_TRUSTED_KEYS or
+ * CONFIG_SECURE_KEYS, plus CONFIG_ENCRYPTED_KEYS,
+ * enabled, which use wrapping/sealing of the actual
+ * key data.
  *
- * Copyright (c) 2022, Matthew Madison
+ * Copyright (c) 2022-2026, Matthew Madison
  */
 
 #ifndef _GNU_SOURCE
@@ -41,6 +41,9 @@ typedef int (*option_routine_t)(void);
 #define SSKEY_NAME    "sskey"
 #define DMCPP_VARNAME "_dmc_passphrase"
 #define DMCPP_NAME    "dmcryptpp"
+#ifndef KEYSTORE_KEYTYPE
+#define KEYSTORE_KEYTYPE "trusted"
+#endif
 
 static struct option options[] = {
 	{ "dmc-passphrase",	no_argument,		0, 'p' },
@@ -110,7 +113,7 @@ setup_passphrase (bool generate, char **sskeyptr, char **dmcppptr)
 	char payload[1024];
 	static const char loadcmd[] = "load ";
 
-	ssk = find_key_by_type_and_desc("secure", SSKEY_NAME, KEY_SPEC_USER_KEYRING);
+	ssk = find_key_by_type_and_desc(KEYSTORE_KEYTYPE, SSKEY_NAME, KEY_SPEC_USER_KEYRING);
 	if (ssk < 0) {
 		if (!generate && *sskeyptr != NULL) {
 			if (strlen(*sskeyptr) + sizeof(loadcmd) >= sizeof(payload)) {
@@ -127,7 +130,7 @@ setup_passphrase (bool generate, char **sskeyptr, char **dmcppptr)
 		 * the permissions and link the key to the user keyring so it can be used by other
 		 * processes/
 		 */
-		ssk = add_key("secure", SSKEY_NAME, payload, strlen(payload), KEY_SPEC_SESSION_KEYRING);
+		ssk = add_key(KEYSTORE_KEYTYPE, SSKEY_NAME, payload, strlen(payload), KEY_SPEC_SESSION_KEYRING);
 		if (ssk < 0)
 			return -1;
 		if (keyctl_setperm(ssk, KEY_POS_ALL|KEY_USR_ALL|KEY_GRP_VIEW|KEY_GRP_SEARCH|KEY_OTH_VIEW|KEY_OTH_SEARCH) < 0)
@@ -163,7 +166,7 @@ setup_passphrase (bool generate, char **sskeyptr, char **dmcppptr)
 			snprintf(payload, sizeof(payload)-1, "%s%s", loadcmd, *dmcppptr);
 			payload[sizeof(payload)-1] = '\0';
 		} else
-			strcpy(payload, "new default secure:" SSKEY_NAME " 32");
+			strcpy(payload, "new default " KEYSTORE_KEYTYPE ":" SSKEY_NAME " 32");
 		dmcpp = add_key("encrypted", DMCPP_NAME, payload, strlen(payload), KEY_SPEC_SESSION_KEYRING);
 		if (dmcpp < 0)
 			return -1;
