@@ -22,8 +22,6 @@ pkg_get_variable(TMPFILESDIR systemd tmpfilesdir)
 configure_file(config-files/imx-bootinfo.conf.in imx-bootinfo.conf @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/imx-bootinfo.conf DESTINATION ${TMPFILESDIR})
 
-add_subdirectory(otp)
-
 add_executable(imx-bootinfo imx-bootinfo.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
 target_compile_definitions(imx-bootinfo PUBLIC
   VERSION="${PROJECT_VERSION}"
@@ -37,8 +35,4 @@ target_compile_definitions(keystoretool PUBLIC
   BOOTINFO_STORAGE_OFFSET_A=${STORAGE_OFFSET})
 target_link_libraries(keystoretool PUBLIC PkgConfig::KEYUTILS PkgConfig::ZLIB)
 
-add_executable(imx-otp-tool imx-otp-tool.c)
-target_include_directories(imx-otp-tool PRIVATE otp)
-target_link_libraries(imx-otp-tool otp)
-
-install(TARGETS imx-bootinfo keystoretool imx-otp-tool RUNTIME)
+install(TARGETS imx-bootinfo keystoretool RUNTIME)
