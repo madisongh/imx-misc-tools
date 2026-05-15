@@ -32,6 +32,9 @@ target_compile_definitions(imx-bootinfo PUBLIC
 target_link_libraries(imx-bootinfo PUBLIC PkgConfig::ZLIB)
 
 add_executable(keystoretool keystoretool.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
+target_compile_definitions(keystoretool PUBLIC
+  BOOTINFO_STORAGE_DEVICE="${STORAGE_DEV}"
+  BOOTINFO_STORAGE_OFFSET_A=${STORAGE_OFFSET})
 target_link_libraries(keystoretool PUBLIC PkgConfig::KEYUTILS PkgConfig::ZLIB)
 
 add_executable(imx-otp-tool imx-otp-tool.c)
