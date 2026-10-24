@@ -1,5 +1,5 @@
 # imx-misc-tools
-This repository contains miscellaneous boot-related tools for i.MX8 platforms.
+This repository contains miscellaneous boot-related tools for i.MX95 platforms.
 
 Derived from [tegra-boot-tools](https://github.com/OE4T/tegra-boot-tools).
 
@@ -19,8 +19,13 @@ CAAM features of the i.MX.
 
 ## imx-otp-tool
 The `imx-otp-tool` tool provides access to the eFuses exported through
-the imx-ocotp driver's nvmem interface, mainly for automating secure boot
-setup.  **PLEASE NOTE** that incorrect manipulation of the eFuses can render
+the imx-ocotp-ele driver's nvmem interface. Note that the driver in NXP's
+downstream kernel (as of 6.18.20-2.0.0) does not map the entire set of
+eFuses for its read-side interface, and it ignores its mapping
+for the write-side interface, so some fuses may read as zero incorrectly,
+but still be programmable.
+
+**PLEASE NOTE** that incorrect manipulation of the eFuses can render
 your device unbootable.  **USE AT YOUR OWN RISK.**
 
 # Builds

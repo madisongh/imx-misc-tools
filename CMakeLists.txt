@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2022, Matthew Madison
+# Copyright (c) 2022-2026, Matthew Madison
 
-cmake_minimum_required(VERSION 3.8)
-cmake_policy(SET CMP0048 NEW)
+cmake_minimum_required(VERSION 4.0)
 
-project(imx_boot_tool LANGUAGES C VERSION 0.4.0)
+project(imx_tools LANGUAGES C VERSION 0.4.0)
 
 include(GNUInstallDirs)
+
+find_library(ELE_HSM_LIB ele_hsm REQUIRED)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -18,9 +19,12 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
 pkg_check_modules(KEYUTILS REQUIRED IMPORTED_TARGET libkeyutils)
 pkg_get_variable(TMPFILESDIR systemd tmpfilesdir)
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 
 configure_file(config-files/imx-bootinfo.conf.in imx-bootinfo.conf @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/imx-bootinfo.conf DESTINATION ${TMPFILESDIR})
+
+add_subdirectory(otp)
 
 add_executable(imx-bootinfo imx-bootinfo.c bootinfo.c bootinfo.h util.c util.h posix-crc32.c posix-crc32.h)
 target_compile_definitions(imx-bootinfo PUBLIC
@@ -35,4 +39,8 @@ target_compile_definitions(keystoretool PUBLIC
   BOOTINFO_STORAGE_OFFSET_A=${STORAGE_OFFSET})
 target_link_libraries(keystoretool PUBLIC PkgConfig::KEYUTILS PkgConfig::ZLIB)
 
-install(TARGETS imx-bootinfo keystoretool RUNTIME)
+add_executable(imx-otp-tool imx-otp-tool.c)
+target_include_directories(imx-otp-tool PRIVATE otp)
+target_link_libraries(imx-otp-tool PUBLIC otp ${ELE_HSM_LIB} PkgConfig::SYSTEMD)
+
+install(TARGETS imx-bootinfo keystoretool imx-otp-tool RUNTIME)
