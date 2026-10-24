@@ -22,7 +22,7 @@
  *   - offsets are from the start of the storage device (positive),
  *     rather than from the end (negative).
  *
- * Copyright (c) 2019-2022, Matthew Madison
+ * Copyright (c) 2019-2026, Matthew Madison
  */
 
 #ifndef _GNU_SOURCE
@@ -243,7 +243,7 @@ show_bootvar (const char *name, int omitname)
  * Sets or deletes a variable.
  */
 int
-set_bootvar (const char *name, const char *value, char *inputfile)
+set_bootvar (char *name, const char *value, char *inputfile)
 {
 	bootinfo_ctx_t *ctx;
 	int ret = 0;
