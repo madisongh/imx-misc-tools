@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 4.0)
 
-project(imx_tools LANGUAGES C VERSION 0.4.0)
+project(imx_tools LANGUAGES C VERSION 0.5.0)
 
 include(GNUInstallDirs)
 
