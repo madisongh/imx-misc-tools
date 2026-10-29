@@ -221,12 +221,16 @@ do_mac_address (otpctx_t ctx, int argc, char * const argv[])
 	}
 
 	if (parse_macaddr(mac_addr, argv[0]) < 0) {
-		perror("parse_macaddr");
+		fprintf(stderr, "Invalid MAC address\n");
 		return -1;
 	}
 
 	if (otp_macaddr_write(ctx, mac_addr, number_of_macs) < 0) {
-		perror("otp_macaddr_write");
+		if (errno == EALREADY) {
+			fprintf(stderr, "ERR: MAC address already programmed\n");
+		} else {
+			perror("otp_macaddr_write");
+		}
 		return -1;
 	}
 	if (lock_after_write) {
@@ -296,7 +300,11 @@ do_machine_id(otpctx_t ctx, int argc, char * const argv[])
 	}
 
 	if (otp_machineid_write(ctx, id) < 0) {
-		perror("otp_machineid_write");
+		if (errno == EALREADY) {
+			fprintf(stderr, "ERR: Machine ID already programmed\n");
+		} else {
+			perror("otp_machineid_write");
+		}
 		return -1;
 	}
 	if (lock_after_write) {
@@ -380,6 +388,25 @@ do_check_secure (otpctx_t ctx, int argc, char * const argv[])
 	op_dev_getinfo_args_t dev_getinfo_args;
 	hsm_err_t err;
 	int ret = 1;
+
+	if (have_srk_hash) {
+		uint32_t srk_hash[SRK_FUSE_COUNT];
+		if (otp_srk_read(ctx, srk_hash, SRK_FUSE_COUNT) < 0) {
+			perror("otp_srk_read");
+			return 1;
+		}
+		if (memcmp(srk_hash, desired_srk_hash, sizeof(srk_hash)) == 0) {
+			if (!opt_quiet) {
+				printf("SRK hashes correctly programmed\n");
+			}
+		} else {
+			fprintf(stderr, "ERR: SRK hash mismatch\n");
+			return 1;
+		}
+	} else if (!opt_quiet) {
+		printf("No fuse file specified, skipping hash check\n");
+	}
+
 	ele_open_args.mu_type = HSM1;
 	err = se_lib_open_service(&ele_open_args, &ele_handle);
 	if (err != HSM_NO_ERROR) {
@@ -417,9 +444,15 @@ main (int argc, char * const argv[])
 	otpctx_t ctx = NULL;
 	option_routine_t dispatch = NULL;
 	char *nvmem_path = NULL;
-	char *fuse_file = NULL;
+	char *fuse_file = getenv("IMX_OTP_FUSE_FILE");
 
 	progname = basename(argv0_copy);
+
+#ifdef DEFAULT_FUSE_FILE
+	if (fuse_file == NULL && access(DEFAULT_FUSE_FILE, R_OK) == 0) {
+		fuse_file = DEFAULT_FUSE_FILE;
+	}
+#endif
 
 	for (;;) {
 		c = getopt_long_only(argc, argv, shortopts, options, &which);

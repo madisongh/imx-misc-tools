@@ -14,6 +14,7 @@ set(CMAKE_C_STANDARD 11)
 set(LKDIRGROUP "root" CACHE STRING "Group owner for lock directory")
 set(STORAGE_DEV "/dev/mmcblk0boot1" CACHE STRING "Device for variable storage")
 set(STORAGE_OFFSET "0" CACHE STRING "Offset to start of variable storage")
+set(FUSE_FILE_PATH "" CACHE STRING "Path name of SRK fuse hash file")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZLIB REQUIRED IMPORTED_TARGET zlib)
@@ -41,6 +42,9 @@ target_link_libraries(keystoretool PUBLIC PkgConfig::KEYUTILS PkgConfig::ZLIB)
 
 add_executable(imx-otp-tool imx-otp-tool.c)
 target_include_directories(imx-otp-tool PRIVATE otp)
+if(NOT "${FUSE_FILE_PATH}" STREQUAL "")
+  target_compile_definitions(imx-otp-tool PRIVATE DEFAULT_FUSE_FILE="${FUSE_FILE_PATH}")
+endif()
 target_link_libraries(imx-otp-tool PUBLIC otp ${ELE_HSM_LIB} PkgConfig::SYSTEMD)
 
 install(TARGETS imx-bootinfo keystoretool imx-otp-tool RUNTIME)
