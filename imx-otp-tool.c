@@ -104,6 +104,42 @@ print_usage (void)
 
 
 /*
+ * show_lifecycle_status
+ */
+static int
+show_lifecycle_status (void)
+{
+	open_se_lib_serv_args_t ele_open_args = {0};
+	se_lib_hdl_t ele_handle;
+	op_dev_getinfo_args_t dev_getinfo_args;
+	hsm_err_t err;
+	int ret = 1;
+
+	ele_open_args.mu_type = HSM1;
+	err = se_lib_open_service(&ele_open_args, &ele_handle);
+	if (err != HSM_NO_ERROR) {
+		printf("ELE service open error, code=0x%x\n", err);
+		return 1;
+	}
+	err = hsm_dev_getinfo(ele_handle, &dev_getinfo_args);
+	if (err != HSM_NO_ERROR) {
+		printf("Error retreiving ELE device info, code=0x%x\n", err);
+	} else {
+		if (opt_quiet) {
+			printf("%s\n",
+				(dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? "DISABLED" : "ENABLED"));
+		} else {
+			printf("Secure boot: %s (0x%x)\n",
+				(dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? "DISABLED" : "ENABLED"),
+				dev_getinfo_args.lmda_val);
+		}
+		ret = dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? 1 : 0;
+	}
+	se_lib_close_service(ele_handle);
+	return ret;
+
+} /* show_lifecycle_status */
+/*
  * do_show
  *
  * Show fuses.
@@ -156,7 +192,7 @@ do_show (otpctx_t ctx, int argc, char * const argv[])
 	       mac_count);
 	printf("Machine ID: %s\n", SD_ID128_TO_STRING(machineid));
 
-	return do_check_secure(ctx, argc, argv);
+	return show_lifecycle_status();
 
 } /* do_show */
 
@@ -383,11 +419,6 @@ do_secure (otpctx_t ctx, int argc, char * const argv[])
 static int
 do_check_secure (otpctx_t ctx, int argc, char * const argv[])
 {
-	open_se_lib_serv_args_t ele_open_args = {0};
-	se_lib_hdl_t ele_handle;
-	op_dev_getinfo_args_t dev_getinfo_args;
-	hsm_err_t err;
-	int ret = 1;
 
 	if (have_srk_hash) {
 		uint32_t srk_hash[SRK_FUSE_COUNT];
@@ -407,28 +438,7 @@ do_check_secure (otpctx_t ctx, int argc, char * const argv[])
 		printf("No fuse file specified, skipping hash check\n");
 	}
 
-	ele_open_args.mu_type = HSM1;
-	err = se_lib_open_service(&ele_open_args, &ele_handle);
-	if (err != HSM_NO_ERROR) {
-		printf("ELE service open error, code=0x%x\n", err);
-		return 1;
-	}
-	err = hsm_dev_getinfo(ele_handle, &dev_getinfo_args);
-	if (err != HSM_NO_ERROR) {
-		printf("Error retreiving ELE device info, code=0x%x\n", err);
-	} else {
-		if (opt_quiet) {
-			printf("%s\n",
-				(dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? "DISABLED" : "ENABLED"));
-		} else {
-			printf("Secure boot: %s (0x%x)\n",
-				(dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? "DISABLED" : "ENABLED"),
-				dev_getinfo_args.lmda_val);
-		}
-		ret = dev_getinfo_args.lmda_val == HSM_LMDA_OEM_OPEN ? 1 : 0;
-	}
-	se_lib_close_service(ele_handle);
-	return ret;
+	return show_lifecycle_status();
 
 } /* do_check_secure */
 
