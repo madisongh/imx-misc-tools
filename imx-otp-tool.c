@@ -32,6 +32,7 @@ static char *progname;
 static bool opt_quiet = false;
 
 typedef int (*option_routine_t)(otpctx_t ctx, int argc, char * const argv[]);
+static int do_secure(otpctx_t ctx, int argc, char * const argv[]);
 static int do_check_secure(otpctx_t ctx, int argc, char * const argv[]);
 static int do_mac_address(otpctx_t ctx, int argc, char * const argv[]);
 static int do_machine_id(otpctx_t ctx, int argc, char * const argv[]);
@@ -45,6 +46,7 @@ static struct {
         { "is-secured", do_check_secure, "check fuses are set for secure boot" },
         { "mac-address",do_mac_address,  "show or program MAC address fuses" },
         { "machine-id", do_machine_id,   "show or program machine ID fuses" },
+        { "secure",     do_secure,       "program SRK fuses" },
         { "show",       do_show,         "show all fuses" },
 };
 
@@ -54,7 +56,7 @@ static struct option options[] = {
 	{ "help",		no_argument,		0, 'h' },
 	{ "quiet",		no_argument,		0, 'q' },
 	{ "lock",		no_argument,		0, 'l' },
-	{ "mac-count",	required_argument,		0, 'm' },
+	{ "mac-count",		required_argument,	0, 'm' },
 	{ 0,			0,			0, 0   }
 };
 static const char *shortopts = ":d:f:hqlm:";
@@ -323,6 +325,50 @@ do_machine_id(otpctx_t ctx, int argc, char * const argv[])
 	return 0;
 
 } /* do_machine_id*/
+
+/*
+ * do_secure
+ */
+static int
+do_secure (otpctx_t ctx, int argc, char * const argv[])
+{
+	uint32_t srk_hash[SRK_FUSE_COUNT];
+	unsigned int i;
+
+	if (!have_srk_hash) {
+		fprintf(stderr, "ERR: securing device requires fuse file\n");
+		return 1;
+	}
+	if (otp_srk_read(ctx, srk_hash, SRK_FUSE_COUNT) < 0) {
+		perror("otp_srk_read");
+		return 1;
+	}
+	if (memcmp(srk_hash, desired_srk_hash, sizeof(srk_hash)) == 0) {
+		if (!opt_quiet)
+			printf("SRK fuses already programmed correctly.\n");
+	} else {
+		// Check for a misprogrammed hash. If the fuses were partially programmed
+		// with the desired SRK hashes (some still zero), that's OK.
+		for (i = 0; i < SRK_FUSE_COUNT && (srk_hash[i] == 0 || srk_hash[i] == desired_srk_hash[i]); i++);
+		if (i < SRK_FUSE_COUNT) {
+			fprintf(stderr, "ERR: SRK fuses already programmed with different hashes\n");
+			return 1;
+		}
+		if (!opt_quiet)
+			printf("Programming SRK fuses.\n");
+		if (otp_srk_write(ctx, desired_srk_hash, SRK_FUSE_COUNT) < 0) {
+			perror("otp_srk_write");
+			return 1;
+		}
+		if (!opt_quiet) {
+			printf("Programmed SRK fuses.\n");
+		}
+	}
+
+	return 0;
+
+} /* do_secure */
+
 /*
  * do_check_secure
  */
